@@ -1,0 +1,77 @@
+name: Build Flowframes
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:        # позволяет запускать вручную из UI
+
+jobs:
+  build:
+    runs-on: windows-latest   # ОБЯЗАТЕЛЬНО Windows — это WinForms приложение
+
+    steps:
+      # 1. Клонируем репозиторий
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Устанавливаем .NET SDK
+      #    Проект использует .NET 8 (новая версия) и .NET Framework 4.7.2 (CodeLegacy)
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # 3. Добавляем MSBuild в PATH (нужен для .NET Framework проектов)
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      # 4. Восстанавливаем NuGet пакеты
+      - name: Restore NuGet packages
+        run: |
+          # Ищем .sln файл и восстанавливаем зависимости
+          $sln = Get-ChildItem -Recurse -Filter "*.sln" | Select-Object -First 1
+          if ($sln) {
+            Write-Host "Found solution: $($sln.FullName)"
+            nuget restore $sln.FullName
+          } else {
+            Write-Host "No .sln found, trying dotnet restore..."
+            dotnet restore
+          }
+        shell: pwsh
+
+      # 5. Билдим основной .NET 8 проект (папка Flowframes/)
+      - name: Build .NET 8 project
+        run: |
+          $proj = Get-ChildItem -Path "Flowframes" -Recurse -Filter "*.csproj" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($proj) {
+            Write-Host "Building: $($proj.FullName)"
+            dotnet build $proj.FullName -c Release -r win-x64 --self-contained false
+          } else {
+            Write-Host "Project not found in Flowframes/, trying root..."
+            dotnet build -c Release
+          }
+        shell: pwsh
+
+      # 6. Публикуем (собираем в один каталог)
+      - name: Publish
+        run: |
+          $proj = Get-ChildItem -Path "Flowframes" -Recurse -Filter "*.csproj" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($proj) {
+            dotnet publish $proj.FullName `
+              -c Release `
+              -r win-x64 `
+              --self-contained false `
+              -o ./publish
+          }
+        shell: pwsh
+
+      # 7. Сохраняем артефакты (скачать из вкладки Actions)
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Flowframes-${{ github.sha }}
+          path: ./publish/
+          if-no-files-found: warn
+          retention-days: 30
